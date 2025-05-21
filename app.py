@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template, redirect
 from huggingface_hub import InferenceClient
 from requests.exceptions import RequestException
 import datetime
@@ -53,67 +53,54 @@ def normalize(text):
 # Application Flask
 app = Flask(__name__)
 
-# Interface HTML basique
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="UTF-8">
-    <title>Chatbot Francophone</title>
-</head>
-<body style="font-family: Arial; padding: 20px;">
-    <h1>💬 Chatbot Francophone</h1>
-    <form method="POST" style="margin-bottom: 20px;">
-        <input type="text" name="message" placeholder="Pose ta question ici..." size="50" required>
-        <button type="submit">Envoyer</button>
-    </form>
-    {% if response %}
-        <h2>Réponse :</h2>
-        <p>{{ response }}</p>
-    {% endif %}
-</body>
-</html>
-"""
-
-@app.route("/", methods=["GET", "POST"])
+@app.route("/", methods=["GET"])
 def home():
-    response = ""
-    if request.method == "POST":
-        user_input = request.form.get("message", "").strip()
-        if not user_input:
-            response = "⚠️ Aucun message fourni."
-        else:
-            normalized_input = normalize(user_input)
-            matched_response = None
-            for key in custom_responses:
-                if normalize(key) in normalized_input:
-                    matched_response = custom_responses[key]
-                    break
-            if matched_response:
-                response = matched_response
-                log_conversation(f"Vous: {user_input}\nAssistant: {response}")
-            else:
-                try:
-                    generated = ""
-                    for message in client.text_generation(
-                        prompt=f"<s>[INST] Réponds brièvement en français à la question suivante : {user_input} [/INST]",
-                        max_new_tokens=150,
-                        stream=True,
-                        temperature=0.5
-                    ):
-                        content = message or ""
-                        generated += content
-                    response = generated
-                    log_conversation(f"Vous: {user_input}\nAssistant: {response}")
-                except RequestException as e:
-                    error_msg = f"🚨 Erreur de connexion : {str(e)}"
-                    response = error_msg
-                    log_conversation(f"Vous: {user_input}\nAssistant: {error_msg}")
-                except Exception as e:
-                    error_msg = f"🚨 Erreur : {str(e)}"
-                    response = error_msg
-                    log_conversation(f"Vous: {user_input}\nAssistant: {error_msg}")
-    return render_template_string(HTML_TEMPLATE, response=response)
+    return render_template("index.html")
+
+@app.route("/ask", methods=["POST"])
+def ask():
+    user_input = request.form.get("message", "").strip()
+
+    if not user_input:
+        return jsonify({"error": "Aucune question envoyée."})
+
+    normalized_input = normalize(user_input)
+    matched_response = None
+
+    # Vérifier les réponses personnalisées
+    for key in custom_responses:
+        if normalize(key) in normalized_input:
+            matched_response = custom_responses[key]
+            break
+
+    if matched_response:
+        log_conversation(f"Vous: {user_input}\nAssistant: {matched_response}")
+        return jsonify({"response": matched_response})
+
+    # Sinon, appeler Hugging Face
+    try:
+        generated = ""
+        for message in client.text_generation(
+            prompt=f"<s>[INST] Réponds brièvement en français à la question suivante : {user_input} [/INST]",
+            max_new_tokens=150,
+            stream=True,
+            temperature=0.5
+        ):
+            content = message or ""
+            generated += content
+
+        log_conversation(f"Vous: {user_input}\nAssistant: {generated}")
+        return jsonify({"response": generated})
+
+    except RequestException as e:
+        error = f"Erreur réseau : {str(e)}"
+        log_conversation(f"Vous: {user_input}\nAssistant: {error}")
+        return jsonify({"error": error})
+
+    except Exception as e:
+        error = f"Erreur serveur : {str(e)}"
+        log_conversation(f"Vous: {user_input}\nAssistant: {error}")
+        return jsonify({"error": error})
 
 if __name__ == "__main__":
     app.run(port=10000)
