@@ -16,5 +16,5 @@ requests==2.32.0
 tqdm==4.67.1
 typing-extensions==4.13.2
 urllib3==2.0.7
-gunicorn==21.2.0  # <--- Ajout ici
-python-dotenv
+gunicorn==21.2.0
+python-dotenv==1.0.1
