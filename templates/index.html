@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatbot Francophone</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="chat-container">
+        <header class="chat-header">
+            <h1>💬 Chatbot Francophone</h1>
+        </header>
+
+        <!-- Loader -->
+        <div id="loader" style="display: none; text-align: center;">
+            <div class="loader-spinner"></div>
+        </div>
+
+        <!-- Liste des messages -->
+        <div class="message-list" id="message-list">
+            <!-- Les messages seront ajoutés ici dynamiquement -->
+        </div>
+
+        <!-- Formulaire d'entrée -->
+        <form id="chat-form" class="input-form">
+            <input type="text" id="user-input" name="message" placeholder="Pose ta question ici..." required>
+            <button type="submit">Envoyer</button>
+        </form>
+    </div>
+
+    <!-- Script pour gérer l'interaction -->
+    <script>
+        const form = document.getElementById("chat-form");
+        const input = document.getElementById("user-input");
+        const messageList = document.getElementById("message-list");
+        const loader = document.getElementById("loader");
+
+        form.addEventListener("submit", function(event) {
+            event.preventDefault(); // Empêche le rechargement
+
+            const userMessage = input.value.trim();
+            if (!userMessage) return;
+
+            // Afficher le message utilisateur
+            const userDiv = document.createElement("div");
+            userDiv.className = "message user";
+            userDiv.textContent = userMessage;
+            messageList.appendChild(userDiv);
+
+            // Réinitialiser le champ de saisie
+            input.value = "";
+
+            // Scroll automatique
+            messageList.scrollTop = messageList.scrollHeight;
+
+            // Afficher le loader
+            loader.style.display = "block";
+
+            // Envoyer la requête au serveur
+            fetch("/ask", {
+                method: "POST",
+                body: new FormData(form)
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Cacher le loader
+                loader.style.display = "none";
+
+                // Afficher la réponse du bot
+                const botDiv = document.createElement("div");
+                botDiv.className = "message bot";
+                botDiv.textContent = data.response || "Aucune réponse.";
+                messageList.appendChild(botDiv);
+
+                // Scroll automatique
+                messageList.scrollTop = messageList.scrollHeight;
+            })
+            .catch(error => {
+                console.error("Erreur :", error);
+                loader.style.display = "none";
+
+                const errorDiv = document.createElement("div");
+                errorDiv.className = "message bot";
+                errorDiv.style.color = "red";
+                errorDiv.textContent = "Une erreur est survenue.";
+                messageList.appendChild(errorDiv);
+
+                messageList.scrollTop = messageList.scrollHeight;
+            });
+        });
+    </script>
+</body>
+</html>
