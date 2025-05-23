@@ -28,8 +28,11 @@ if not HUGGINGFACE_API_KEY:
     logging.error("La clé API HUGGINGFACE_API_KEY n'est pas définie.")
     raise ValueError("La clé API HUGGINGFACE_API_KEY n'est pas définie.")
 
-# Initialiser le client HuggingFace
-MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.3"
+# Initialiser le client HuggingFace avec un modèle gratuit
+MODEL_NAME = "microsoft/DialoGPT-medium"  # Modèle gratuit pour conversation
+# Alternatives gratuites :
+# "facebook/blenderbot-400M-distill"
+# "microsoft/DialoGPT-small" (plus rapide)
 client = InferenceClient(model=MODEL_NAME, token=HUGGINGFACE_API_KEY)
 
 # Réponses personnalisées (correspondance exacte uniquement)
@@ -48,6 +51,13 @@ custom_responses = {
     "messy charles": "C'est le père de Manou.",
     "qui est raphaël niamé": "Raphaël Niamé est un développeur freelance d'applications web, mobiles et bureau.",
     "qui est raphaël niamé ?": "Raphaël Niamé est un développeur freelance d'applications web, mobiles et bureau.",
+    "qui est raphaël niamé ?": "Raphaël Niamé est un développeur freelance d'applications web, mobiles et bureaux.",
+    "raphaël niamé ?": "Raphaël Niamé est un développeur freelance d'applications web, mobiles et bureau.",
+    "Qui est Oré Roland ?": "C'est un grand homme d'affaires. Il est ivoirien.",
+    "Dis-moi comment raphael niamé a procédé pour te concevoir": "Raphaël Niamé est un développeur freelance d'applications web, mobiles et bureau.",
+    "en quel langage de programmation as-tu été conçu ?": "J’ai été conçu principalement en Python, qui est le langage de prédilection pour le développement d’intelligences artificielles mais d'autres langages téls que C++ ou javascript font partie des langes utilisées pour me créer .",
+    
+
 }
 
 def normalize(text):
@@ -107,14 +117,19 @@ def ask():
     # Sinon, appeler Hugging Face avec InferenceClient
     logging.info("Appel à l'API Hugging Face...")
     try:
-        prompt = f"[INST] Réponds en français de manière concise et utile : {user_input} [/INST]"
+        # Pour DialoGPT, format de prompt différent
+        if "DialoGPT" in MODEL_NAME:
+            prompt = user_input
+        else:
+            prompt = f"Question: {user_input}\nRéponse:"
+        
         response = ""
 
         for token in client.text_generation(
             prompt=prompt, 
-            max_new_tokens=150, 
+            max_new_tokens=100, 
             stream=True,
-            temperature=0.7,
+            temperature=0.8,
             do_sample=True
         ):
             response += token or ""
