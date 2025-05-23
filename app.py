@@ -4,14 +4,13 @@ import os
 import logging
 from datetime import datetime
 from dotenv import load_dotenv
+from huggingface_hub import InferenceClient
+from requests.exceptions import RequestException
 
-# Créer l'application Flask
-app = Flask(__name__)
-
-# Charger les variables d'environnement depuis le fichier .env
+# Charger les variables d'environnement
 load_dotenv()
 
-# Configuration des logs (plus robuste pour Render)
+# Configuration des logs
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(message)s',
@@ -20,11 +19,36 @@ logging.basicConfig(
     ]
 )
 
-# Charger la clé API
-api_key = os.environ.get("HUGGINGFACE_API_KEY")
-if not api_key:
+# Initialiser Flask
+app = Flask(__name__)
+
+# Charger la clé API HuggingFace
+HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY")
+if not HUGGINGFACE_API_KEY:
     logging.error("La clé API HUGGINGFACE_API_KEY n'est pas définie.")
     raise ValueError("La clé API HUGGINGFACE_API_KEY n'est pas définie.")
+
+# Initialiser le client HuggingFace
+client = InferenceClient(model="HuggingFaceH4/zephyr-7b-beta", token=HUGGINGFACE_API_KEY)
+
+# Réponses personnalisées
+custom_responses = {
+    "bonjour": "Bonjour ! Comment puis-je vous aider ?",
+    "salut": "Bonjour ! Comment puis-je vous aider ?",
+    "hello": "Bonjour ! Comment puis-je vous aider ?",
+    "comment ça va": "Je vais bien, merci ! Et vous ?",
+    "qui es-tu": "Je suis un assistant IA basé sur le modèle Zephyr-7B.",
+}
+
+def normalize(text):
+    return text.lower().strip()
+
+def log_conversation(entry):
+    try:
+        with open("conversation.log", "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now()} - {entry}\n")
+    except Exception as e:
+        logging.error(f"Erreur lors de l'écriture du log : {e}")
 
 @app.route("/")
 def home():
@@ -32,81 +56,69 @@ def home():
 
 @app.route("/ask", methods=["POST"])
 def ask():
+    user_input = request.form.get("message", "").strip()
+
+    if not user_input:
+        return jsonify({"error": "Aucune question envoyée."}), 400
+
+    normalized_input = normalize(user_input)
+    matched_response = None
+
+    # Vérifier les réponses personnalisées
+    for key in custom_responses:
+        if normalize(key) in normalized_input:
+            matched_response = custom_responses[key]
+            break
+
+    if matched_response:
+        log_conversation(f"Vous: {user_input}\nAssistant: {matched_response}")
+        return jsonify({"response": matched_response})
+
+    # Sinon, appeler Hugging Face
     try:
-        # Récupérer le message de l'utilisateur
-        user_input = request.form.get("message", "").strip()
-        logging.info(f"Message reçu: {user_input}")
-        
-        if not user_input:
-            return jsonify({"error": "Aucune question envoyée."}), 400
+        payload = {
+            "inputs": f"[INST] Réponds en français : {user_input} [/INST]",
+            "parameters": {
+                "max_new_tokens": 150,
+                "temperature": 0.7,
+                "return_full_text": False
+            }
+        }
 
-        # Réponses personnalisées
-        if user_input.lower() in ["bonjour", "salut", "hello"]:
-            response = "Bonjour ! Comment puis-je vous aider ?"
-        else:
-            try:
-                # URL corrigée (suppression de l'espace en trop)
-                API_URL = "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta"
-                headers = {"Authorization": f"Bearer {api_key}"}
-                
-                payload = {
-                    "inputs": f"[INST] Réponds en français : {user_input} [/INST]",
-                    "parameters": {
-                        "max_new_tokens": 100,
-                        "temperature": 0.7,
-                        "return_full_text": False
-                    }
-                }
+        headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
+        response = requests.post(
+            "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta ",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        response.raise_for_status()
 
-                logging.info(f"Envoi de la requête à Hugging Face...")
-                resp = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-                
-                logging.info(f"Status code: {resp.status_code}")
-                logging.info(f"Réponse brute: {resp.text}")
-                
-                resp.raise_for_status()
+        data = response.json()
+        generated_text = data[0].get("generated_text", "") if isinstance(data, list) else str(data)
+        cleaned = generated_text.split("[/INST]")[-1].strip() if "[/INST]" in generated_text else generated_text.strip()
 
-                response_data = resp.json()
-                
-                # Vérifier si la réponse est dans le bon format
-                if isinstance(response_data, list) and len(response_data) > 0:
-                    generated_text = response_data[0].get("generated_text", "")
-                else:
-                    generated_text = str(response_data)
+        if not cleaned:
+            cleaned = "Je n'ai pas pu générer une réponse appropriée."
 
-                # Nettoyer la réponse
-                if "[/INST]" in generated_text:
-                    response = generated_text.split("[/INST]")[-1].strip()
-                else:
-                    response = generated_text.strip()
+        log_conversation(f"Vous: {user_input}\nAssistant: {cleaned}")
+        return jsonify({"response": cleaned})
 
-                # Si la réponse est vide, donner une réponse par défaut
-                if not response:
-                    response = "Je n'ai pas pu générer une réponse appropriée."
-
-            except requests.exceptions.Timeout:
-                logging.error("Timeout lors de la requête à Hugging Face")
-                response = "Le service met trop de temps à répondre. Réessayez plus tard."
-            except requests.exceptions.RequestException as e:
-                logging.error(f"Erreur réseau : {str(e)}")
-                response = "Erreur de connexion au service d'IA."
-            except Exception as e:
-                logging.error(f"Erreur lors du traitement de la réponse IA : {str(e)}")
-                response = "Désolé, je ne peux pas répondre pour le moment."
-
-        logging.info(f"Réponse envoyée: {response}")
-        return jsonify({"response": response})
+    except RequestException as e:
+        error = f"Erreur réseau : {str(e)}"
+        log_conversation(f"Vous: {user_input}\nAssistant: {error}")
+        return jsonify({"error": error}), 503
 
     except Exception as e:
-        logging.error(f"Erreur générale dans /ask : {str(e)}")
-        return jsonify({"error": "Erreur interne du serveur"}), 500
+        error = f"Erreur serveur : {str(e)}"
+        log_conversation(f"Vous: {user_input}\nAssistant: {error}")
+        return jsonify({"error": error}), 500
 
-# Route de test pour vérifier que l'API fonctionne
 @app.route("/test")
 def test():
     return jsonify({
-        "status": "OK", 
-        "api_key_configured": bool(api_key),
+        "status": "OK",
+        "api_key_configured": bool(HUGGINGFACE_API_KEY),
         "timestamp": datetime.now().isoformat()
     })
 

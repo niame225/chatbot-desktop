@@ -48,6 +48,9 @@
             userDiv.textContent = userMessage;
             messageList.appendChild(userDiv);
 
+            // Réinitialiser le champ de saisie
+            input.value = "";
+
             // Scroll automatique
             messageList.scrollTop = messageList.scrollHeight;
 
@@ -57,9 +60,6 @@
             // Créer FormData AVANT de vider le champ input
             const formData = new FormData();
             formData.append('message', userMessage);
-
-            // Réinitialiser le champ de saisie APRÈS avoir créé FormData
-            input.value = "";
 
             // Envoyer la requête au serveur
             fetch("/ask", {
@@ -75,14 +75,14 @@
             })
             .then(data => {
                 console.log("Réponse reçue:", data);
-                
+
                 // Cacher le loader
                 loader.style.display = "none";
 
                 // Afficher la réponse du bot
                 const botDiv = document.createElement("div");
                 botDiv.className = "message bot";
-                
+
                 if (data.response) {
                     botDiv.textContent = data.response;
                 } else if (data.error) {
@@ -92,7 +92,7 @@
                     botDiv.textContent = "Aucune réponse reçue.";
                     botDiv.style.color = "gray";
                 }
-                
+
                 messageList.appendChild(botDiv);
 
                 // Scroll automatique

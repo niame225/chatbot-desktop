@@ -1,4 +1,8 @@
+# Fichiers d'environnement
 .env
+
+# Logs et fichiers temporaires
 logs/
-__pycache__/
+*.log
 *.pyc
+__pycache__/
