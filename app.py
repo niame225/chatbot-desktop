@@ -1,192 +1,247 @@
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, render_template, request, jsonify
+from flask_cors import CORS
 import requests
 import os
 import logging
-from datetime import datetime
-from dotenv import load_dotenv
-from huggingface_hub import InferenceClient
-from requests.exceptions import RequestException
 
-# Charger les variables d'environnement
-load_dotenv()
-
-# Configuration des logs
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),  # Affichage dans la console
-    ]
-)
-
-# Initialiser Flask
 app = Flask(__name__)
+CORS(app)  # Permet les requêtes cross-origin
 
-# Charger la clé API HuggingFace
-HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY")
-if not HUGGINGFACE_API_KEY:
-    logging.error("La clé API HUGGINGFACE_API_KEY n'est pas définie.")
-    raise ValueError("La clé API HUGGINGFACE_API_KEY n'est pas définie.")
+# Configuration du logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Initialiser le client HuggingFace avec un modèle gratuit
-MODEL_NAME = "microsoft/DialoGPT-medium"  # Modèle gratuit pour conversation
-# Alternatives gratuites :
-# "facebook/blenderbot-400M-distill"
-# "microsoft/DialoGPT-small" (plus rapide)
-client = InferenceClient(model=MODEL_NAME, token=HUGGINGFACE_API_KEY)
+# Configuration Hugging Face
+HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/microsoft/DialoGPT-small"
+HUGGINGFACE_TOKEN = os.getenv('HUGGINGFACE_API_KEY')
 
-# Réponses personnalisées (correspondance exacte uniquement)
-custom_responses = {
-    "bonjour": "Bonjour ! Comment puis-je vous aider ?",
-    "salut": "Salut ! Comment puis-je vous aider ?",
-    "hello": "Salut ! Comment puis-je vous aider ?",
+# Réponses personnalisées (fallback)
+CUSTOM_RESPONSES = {
+    "bonjour": "Bonjour ! Comment puis-je vous aider aujourd'hui ?",
+    "salut": "Salut ! Que puis-je faire pour vous ?",
     "comment ça va": "Je vais bien, merci ! Et vous ?",
-    "comment ça va ?": "Je vais bien, merci ! Et vous ?",
-    "qui es-tu": "Je suis un assistant IA basé sur le modèle GPT.",
-    "qui es-tu ?": "Je suis un assistant IA basé sur le modèle GPT.",
-    "qui t'a conçu": "Raphaël Niamé (+225) 05 06 53 15 22.",
-    "qui t'a conçu ?": "Raphaël Niamé (+225) 05 06 53 15 22.",
-    "soma": "C'est un célèbre agent immobilier.",
-    "oulai": "C'est le père de Tchounatchou.",
-    "messy charles": "C'est le père de Manou.",
-    "qui est raphaël niamé": "Raphaël Niamé est un développeur freelance d'applications web, mobiles et bureau.",
-    "qui est raphaël niamé ?": "Raphaël Niamé est un développeur freelance d'applications web, mobiles et bureau.",
-    "qui est raphaël niamé ?": "Raphaël Niamé est un développeur freelance d'applications web, mobiles et bureaux.",
-    "raphaël niamé ?": "Raphaël Niamé est un développeur freelance d'applications web, mobiles et bureau.",
-    "Qui est Oré Roland ?": "C'est un grand homme d'affaires. Il est ivoirien.",
-    "Dis-moi comment raphael niamé a procédé pour te concevoir": "Raphaël Niamé est un développeur freelance d'applications web, mobiles et bureau.",
-    "en quel langage de programmation as-tu été conçu ?": "J’ai été conçu principalement en Python, qui est le langage de prédilection pour le développement d’intelligences artificielles mais d'autres langages téls que C++ ou javascript font partie des langes utilisées pour me créer .",
-    
-
+    "au revoir": "Au revoir ! Passez une excellente journée !",
+    "merci": "De rien, je suis là pour vous aider !",
+    "hello": "Hello! How can I help you today?",
+    "hi": "Hi there! What can I do for you?",
+    "qui t'a conçu": "Raphaël Niamé (+225) 05 06 53 15 22",
+    "qui t'a concu": "Raphaël Niamé (+225) 05 06 53 15 22",
+    "qui t'a fait": "Raphaël Niamé (+225) 05 06 53 15 22",
+    "Qui t'a conçu": "Raphaël Niamé (+225) 05 06 53 15 22",
+    "Qui t'a concu": "Raphaël Niamé (+225) 05 06 53 15 22",
+    "Qui t'a concu": "Raphaël Niamé (+225) 05 06 53 15 22",
+    "qui est Messy charles": "C'est le père de Manou et Messy",
+    "qui t'a conçu": "Raphaël Niamé (+225) 05 06 53 15 22",
+    "qui est Awainou Messy charles": "C'est le père de Manou et Messy",
+    "Messy charles": "C'est le père de Manou et Messy",
+    "Awainou Messy charles": "C'est le père de Manou et Messy",
+    "bonsoir": "Bonsoir ! Comment puis-je vous aider ce soir ?",
 }
 
-def normalize(text):
-    return text.lower().strip()
-
-def log_conversation(entry):
-    try:
-        with open("conversation.log", "a", encoding="utf-8") as f:
-            f.write(f"{datetime.now()} - {entry}\n")
-    except Exception as e:
-        logging.error(f"Erreur lors de l'écriture du log : {e}")
-
-def get_custom_response(user_input):
-    """Vérifier uniquement les correspondances exactes pour les réponses personnalisées"""
-    normalized_input = normalize(user_input)
-    
-    # Correspondance exacte d'abord
-    if normalized_input in custom_responses:
-        return custom_responses[normalized_input]
-    
-    # Quelques correspondances spéciales pour des variations courantes
-    special_cases = {
-        "salutation": ["bonjour", "salut", "hello", "hi", "bonsoir"],
-        "état": ["comment ça va", "comment allez-vous", "ça va"],
-        "identité": ["qui es-tu", "que fais-tu", "ton nom"]
-    }
-    
-    for category, keywords in special_cases.items():
-        for keyword in keywords:
-            if normalized_input == keyword or normalized_input == keyword + "?":
-                if keyword in custom_responses:
-                    return custom_responses[keyword]
-    
+def get_custom_response(message):
+    """Cherche une réponse personnalisée"""
+    message_lower = message.lower().strip()
+    for key, response in CUSTOM_RESPONSES.items():
+        if key in message_lower:
+            return response
     return None
 
-@app.route("/")
-def home():
-    return render_template("index.html")
-
-@app.route("/ask", methods=["POST"])
-def ask():
-    user_input = request.form.get("message", "").strip()
-
-    if not user_input:
-        return jsonify({"error": "Aucune question envoyée."}), 400
-
-    logging.info(f"Question reçue: {user_input}")
-
-    # Vérifier les réponses personnalisées (correspondance exacte uniquement)
-    custom_response = get_custom_response(user_input)
-    
-    if custom_response:
-        logging.info(f"Réponse personnalisée trouvée: {custom_response}")
-        log_conversation(f"Vous: {user_input}\nAssistant: {custom_response}")
-        return jsonify({"response": custom_response})
-
-    # Sinon, appeler Hugging Face avec InferenceClient
-    logging.info("Appel à l'API Hugging Face...")
+def get_huggingface_response(message):
+    """Appel à l'API Hugging Face avec gestion d'erreur complète"""
     try:
-        # Pour DialoGPT, format de prompt différent
-        if "DialoGPT" in MODEL_NAME:
-            prompt = user_input
-        else:
-            prompt = f"Question: {user_input}\nRéponse:"
+        headers = {
+            "Content-Type": "application/json"
+        }
         
-        response = ""
-
-        for token in client.text_generation(
-            prompt=prompt, 
-            max_new_tokens=100, 
-            stream=True,
-            temperature=0.8,
-            do_sample=True
-        ):
-            response += token or ""
-
-        cleaned = response.strip()
-        if not cleaned:
-            cleaned = "Je n'ai pas pu générer une réponse appropriée."
-
-        logging.info(f"Réponse IA générée: {cleaned[:100]}...")
-        log_conversation(f"Vous: {user_input}\nAssistant: {cleaned}")
-        return jsonify({"response": cleaned})
-
-    except RequestException as e:
-        error = f"Erreur réseau avec Hugging Face : {str(e)}"
-        logging.error(error)
-        log_conversation(f"Vous: {user_input}\nAssistant: {error}")
-        return jsonify({"error": error}), 503
-
+        if HUGGINGFACE_TOKEN:
+            headers["Authorization"] = f"Bearer {HUGGINGFACE_TOKEN}"
+        
+        payload = {
+            "inputs": message,
+            "parameters": {
+                "max_length": 50,
+                "temperature": 0.7,
+                "do_sample": True,
+                "pad_token_id": 50256
+            },
+            "options": {
+                "wait_for_model": True
+            }
+        }
+        
+        logger.info(f"Envoi requête HF pour: {message}")
+        
+        response = requests.post(
+            HUGGINGFACE_API_URL, 
+            headers=headers, 
+            json=payload,
+            timeout=30
+        )
+        
+        logger.info(f"Status HF: {response.status_code}")
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result and len(result) > 0:
+                generated_text = result[0].get('generated_text', '')
+                if message in generated_text:
+                    generated_text = generated_text.replace(message, '').strip()
+                
+                if generated_text and len(generated_text) > 3:
+                    sentences = generated_text.split('.')
+                    clean_response = sentences[0].strip()
+                    return clean_response + "." if clean_response else "Je ne sais pas quoi répondre."
+                
+        elif response.status_code == 402:
+            return "⚠️ Service IA temporairement indisponible (limite atteinte). Essayez 'bonjour', 'merci', etc."
+        elif response.status_code == 503:
+            return "🔄 Modèle en cours de chargement, réessayez dans 30 secondes."
+        else:
+            logger.error(f"Erreur HF: {response.status_code}")
+            return f"❌ Erreur technique (Code: {response.status_code})"
+            
     except Exception as e:
-        error = f"Erreur serveur : {str(e)}"
-        logging.error(error)
-        log_conversation(f"Vous: {user_input}\nAssistant: {error}")
-        return jsonify({"error": error}), 500
+        logger.error(f"Exception HF: {str(e)}")
+        return "🔧 Erreur technique, réessayez."
 
-@app.route("/test")
-def test():
+def get_bot_response(message):
+    """Fonction principale pour obtenir une réponse"""
+    if not message or len(message.strip()) == 0:
+        return "Veuillez saisir un message."
+    
+    if len(message) > 200:
+        return "Message trop long (max 200 caractères)."
+    
+    # 1. Réponses personnalisées d'abord
+    custom_response = get_custom_response(message)
+    if custom_response:
+        logger.info(f"Réponse personnalisée pour: {message}")
+        return custom_response
+    
+    # 2. API Hugging Face
+    return get_huggingface_response(message)
+
+@app.route('/')
+def home():
+    """Page d'accueil"""
+    return render_template('index.html')
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    """Route principale pour le chat (JSON)"""
+    try:
+        logger.info("Requête reçue sur /chat")
+        
+        # Vérifier le content-type
+        if not request.is_json:
+            logger.error("Content-Type n'est pas JSON")
+            return jsonify({'error': 'Content-Type doit être application/json'}), 400
+        
+        data = request.get_json()
+        if not data:
+            logger.error("Pas de données JSON")
+            return jsonify({'error': 'Données JSON manquantes'}), 400
+            
+        user_message = data.get('message', '').strip()
+        logger.info(f"Message reçu: '{user_message}'")
+        
+        if not user_message:
+            return jsonify({'response': 'Veuillez saisir un message.'})
+        
+        bot_response = get_bot_response(user_message)
+        logger.info(f"Réponse envoyée: '{bot_response}'")
+        
+        return jsonify({'response': bot_response})
+        
+    except Exception as e:
+        logger.error(f"Erreur dans /chat: {str(e)}")
+        return jsonify({'error': f'Erreur serveur: {str(e)}'}), 500
+
+@app.route('/ask', methods=['POST'])  
+def ask():
+    """Route pour compatibilité (FormData et JSON)"""
+    try:
+        logger.info("Requête reçue sur /ask")
+        
+        # Support FormData ET JSON
+        if request.is_json:
+            data = request.get_json()
+            user_message = data.get('message', '').strip()
+        else:
+            user_message = request.form.get('message', '').strip()
+            
+        logger.info(f"Message /ask: '{user_message}'")
+        
+        if not user_message:
+            return jsonify({'response': 'Veuillez saisir un message.'})
+        
+        bot_response = get_bot_response(user_message)
+        return jsonify({'response': bot_response})
+        
+    except Exception as e:
+        logger.error(f"Erreur /ask: {str(e)}")
+        return jsonify({'error': f'Erreur: {str(e)}'}), 500
+
+@app.route('/health')
+def health():
+    """Vérification santé"""
     return jsonify({
-        "status": "OK",
-        "api_key_configured": bool(HUGGINGFACE_API_KEY),
-        "model": MODEL_NAME,
-        "timestamp": datetime.now().isoformat()
+        'status': 'OK ✅',
+        'message': 'Flask fonctionne',
+        'huggingface_token': 'Configuré' if HUGGINGFACE_TOKEN else 'Non configuré ⚠️',
+        'routes': ['/chat', '/ask', '/health', '/test', '/debug']
     })
 
-@app.route("/debug", methods=["POST"])
-def debug():
-    """Route de debug pour tester l'API Hugging Face directement"""
-    try:
-        test_prompt = "[INST] Bonjour, comment allez-vous ? [/INST]"
-        response = ""
-        
-        for token in client.text_generation(prompt=test_prompt, max_new_tokens=50, stream=True):
-            response += token or ""
-            
-        return jsonify({
-            "status": "success",
-            "response": response.strip(),
-            "model": MODEL_NAME
-        })
-    
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "error": str(e)
-        }), 500
+@app.route('/test')
+def test():
+    """Test de l'API"""
+    test_response = get_bot_response("bonjour")
+    return jsonify({
+        'test_message': 'bonjour',
+        'response': test_response,
+        'token_status': bool(HUGGINGFACE_TOKEN)
+    })
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    logging.info(f"Démarrage de l'application sur le port {port}")
-    logging.info(f"Modèle utilisé: {MODEL_NAME}")
-    app.run(host="0.0.0.0", port=port, debug=False)
+@app.route('/debug')
+def debug():
+    """Debug complet"""
+    return jsonify({
+        'flask_status': 'Actif ✅',
+        'routes_disponibles': [
+            'GET /',
+            'POST /chat (JSON)',
+            'POST /ask (FormData/JSON)', 
+            'GET /health',
+            'GET /test',
+            'GET /debug'
+        ],
+        'variables_env': {
+            'PORT': os.environ.get('PORT', 'Non défini'),
+            'HUGGINGFACE_API_KEY': 'Configuré' if HUGGINGFACE_TOKEN else 'Non configuré'
+        },
+        'custom_responses_count': len(CUSTOM_RESPONSES)
+    })
+
+# Gestion d'erreurs
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Route non trouvée'}), 404
+
+@app.errorhandler(500)
+def server_error(error):
+    return jsonify({'error': 'Erreur serveur interne'}), 500
+
+if __name__ == '__main__':
+    if not HUGGINGFACE_TOKEN:
+        logger.warning("⚠️ HUGGINGFACE_API_KEY non configuré")
+    else:
+        logger.info("✅ Token Hugging Face OK")
+    
+    port = int(os.environ.get('PORT', 5000))
+    logger.info(f"🚀 Démarrage sur port {port}")
+    
+    app.run(
+        host='0.0.0.0', 
+        port=port, 
+        debug=False
+    )
