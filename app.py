@@ -29,15 +29,21 @@ if not HUGGINGFACE_API_KEY:
     raise ValueError("La clé API HUGGINGFACE_API_KEY n'est pas définie.")
 
 # Initialiser le client HuggingFace
-client = InferenceClient(model="HuggingFaceH4/zephyr-7b-beta", token=HUGGINGFACE_API_KEY)
+MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.3"
+client = InferenceClient(model=MODEL_NAME, token=HUGGINGFACE_API_KEY)
 
 # Réponses personnalisées
 custom_responses = {
     "bonjour": "Bonjour ! Comment puis-je vous aider ?",
-    "salut": "Bonjour ! Comment puis-je vous aider ?",
-    "hello": "Bonjour ! Comment puis-je vous aider ?",
+    "salut": "Salut ! Comment puis-je vous aider ?",
+    "hello": "Salut ! Comment puis-je vous aider ?",
     "comment ça va": "Je vais bien, merci ! Et vous ?",
-    "qui es-tu": "Je suis un assistant IA basé sur le modèle Zephyr-7B.",
+    "qui es-tu": "Je suis un assistant IA basé sur le modèle GPT.",
+    "qui t'a conçu": "Raphaël Niamé (+225) 05 06 53 15 22.",
+    "Soma": "C'est un célèbre agent immobilier.",
+    "oulai": "C'est le père de Tchounatchou.",
+    "Messy Charles": "C'est le père de Manou.",
+    "qui est Raphaël Niamé ": "Raphaël Niamé est un développeur freelance d'applications web,  mobiles et bureau.",
 }
 
 def normalize(text):
@@ -74,36 +80,30 @@ def ask():
         log_conversation(f"Vous: {user_input}\nAssistant: {matched_response}")
         return jsonify({"response": matched_response})
 
-    # Sinon, appeler Hugging Face
+    # Sinon, appeler Hugging Face avec InferenceClient
     try:
-        payload = {
-            "inputs": f"[INST] Réponds en français : {user_input} [/INST]",
-            "parameters": {
-                "max_new_tokens": 150,
-                "temperature": 0.7,
-                "return_full_text": False
-            }
-        }
+        prompt = f"[INST] Réponds en français : {user_input} [/INST]"
+        response = ""
 
-        headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
-        response = requests.post(
-            "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta ",
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
-        response.raise_for_status()
+        for token in client.text_generation(prompt=prompt, max_new_tokens=150, stream=True):
+            response += token or ""
 
-        data = response.json()
-        generated_text = data[0].get("generated_text", "") if isinstance(data, list) else str(data)
-        cleaned = generated_text.split("[/INST]")[-1].strip() if "[/INST]" in generated_text else generated_text.strip()
-
+        cleaned = response.strip()
         if not cleaned:
             cleaned = "Je n'ai pas pu générer une réponse appropriée."
 
         log_conversation(f"Vous: {user_input}\nAssistant: {cleaned}")
         return jsonify({"response": cleaned})
 
+    except RequestException as e:
+        error = f"Erreur réseau : {str(e)}"
+        log_conversation(f"Vous: {user_input}\nAssistant: {error}")
+        return jsonify({"error": error}), 503
+
+    except Exception as e:
+        error = f"Erreur serveur : {str(e)}"
+        log_conversation(f"Vous: {user_input}\nAssistant: {error}")
+        return jsonify({"error": error}), 500
     except RequestException as e:
         error = f"Erreur réseau : {str(e)}"
         log_conversation(f"Vous: {user_input}\nAssistant: {error}")
