@@ -39,11 +39,35 @@ CUSTOM_RESPONSES = {
 }
 
 def get_custom_response(message):
-    """Cherche une réponse personnalisée"""
+    """Cherche une réponse personnalisée avec correspondance de mots-clés multiples"""
+    if not message:
+        return None
+        
     message_lower = message.lower().strip()
+    # Nettoyer le message : supprimer la ponctuation et séparer en mots
+    import re
+    # Remplacer la ponctuation par des espaces
+    clean_message = re.sub(r'[^\w\s]', ' ', message_lower)
+    message_words = set(clean_message.split())  # Utiliser un set pour une recherche plus rapide
+    
+    # Parcourir toutes les réponses personnalisées
     for key, response in CUSTOM_RESPONSES.items():
-        if key in message_lower:
+        # Nettoyer la clé de la même façon
+        clean_key = re.sub(r'[^\w\s]', ' ', key.lower())
+        key_words = clean_key.split()
+        
+        # Vérifier si tous les mots de la clé sont dans le message
+        if key_words and all(word in message_words for word in key_words):
+            logger.info(f"Correspondance trouvée: '{key}' -> '{message}'")
             return response
+    
+    # Si aucune correspondance exacte, essayer une correspondance partielle
+    for key, response in CUSTOM_RESPONSES.items():
+        key_lower = key.lower()
+        if key_lower in message_lower or message_lower in key_lower:
+            logger.info(f"Correspondance partielle: '{key}' -> '{message}'")
+            return response
+    
     return None
 
 def get_huggingface_response(message):
