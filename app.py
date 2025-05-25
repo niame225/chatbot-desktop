@@ -3,6 +3,11 @@ from flask_cors import CORS
 import os
 import logging
 import re
+import os
+
+os.makedirs("/tmp/cache", exist_ok=True)
+os.environ["TRANSFORMERS_CACHE"] = "/tmp/cache"
+os.environ["HF_HOME"] = "/tmp"
 
 app = Flask(__name__)
 CORS(app)
