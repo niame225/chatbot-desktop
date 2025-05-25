@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
 import logging
-from transformers import pipeline
 
 app = Flask(__name__)
 CORS(app)
@@ -11,18 +10,32 @@ CORS(app)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Charger le modèle Qwen localement
-try:
-    qwen_pipeline = pipeline(
-        "text-generation",
-        model="Qwen/Qwen2-0.5B-Instruct",
-        max_new_tokens=100,
-        pad_token_id=50256
-    )
-    logger.info("✅ Modèle Qwen chargé")
-except Exception as e:
-    logger.error(f"❌ Échec du chargement du modèle : {str(e)}")
-    qwen_pipeline = None
+# Variable globale pour le modèle (chargement paresseux)
+qwen_pipeline = None
+
+def load_model_if_needed():
+    """Charge le modèle seulement quand nécessaire"""
+    global qwen_pipeline
+    if qwen_pipeline is None:
+        try:
+            from transformers import pipeline
+            logger.info("🔄 Chargement du modèle Qwen...")
+            
+            qwen_pipeline = pipeline(
+                "text-generation",
+                model="Qwen/Qwen2-0.5B-Instruct",
+                max_new_tokens=30,  # Encore plus économe
+                pad_token_id=50256,
+                device_map="auto",
+                torch_dtype="auto"
+            )
+            logger.info("✅ Modèle Qwen chargé avec succès")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Échec du chargement du modèle : {str(e)}")
+            qwen_pipeline = "error"  # Marquer comme erreur
+            return False
+    return qwen_pipeline != "error"
 
 # Réponses personnalisées (fallback)
 CUSTOM_RESPONSES = {
@@ -65,7 +78,7 @@ def get_custom_response(message):
     import re
     # Remplacer la ponctuation par des espaces
     clean_message = re.sub(r'[^\w\s]', ' ', message_lower)
-    message_words = set(clean_message.split())  # Utiliser un set pour une recherche plus rapide
+    message_words = set(clean_message.split())
     
     # Parcourir toutes les réponses personnalisées
     for key, response in CUSTOM_RESPONSES.items():
@@ -90,6 +103,9 @@ def get_custom_response(message):
 def get_local_model_response(message):
     """Utilise un modèle local (Qwen2-0.5B) pour générer une réponse"""
     try:
+        if not load_model_if_needed():
+            return "⚠️ Le modèle IA est temporairement indisponible."
+            
         logger.info(f"Envoi au modèle local: {message}")
 
         prompt = f"User: {message}\nAssistant:"
@@ -99,7 +115,7 @@ def get_local_model_response(message):
             generated_text = response[0]['generated_text'].replace(prompt, '').strip()
 
             if generated_text:
-                return generated_text.split('\n')[0][:250]  # Limite à 250 caractères
+                return generated_text.split('\n')[0][:200]  # Limite à 200 caractères
 
         return "Je n'ai pas réussi à comprendre votre question."
 
@@ -115,25 +131,23 @@ def get_bot_response(message):
     if len(message) > 200:
         return "Message trop long (max 200 caractères)."
 
-    # 1. Réponses personnalisées d'abord
+    # 1. Réponses personnalisées d'abord (plus rapide et économe)
     custom_response = get_custom_response(message)
     if custom_response:
         logger.info(f"Réponse personnalisée pour: {message}")
         return custom_response
 
-    # 2. Modèle local IA
-    if qwen_pipeline:
-        return get_local_model_response(message)
-    else:
-        return "⚠️ Le modèle IA est temporairement indisponible."
+    # 2. Modèle local IA seulement si nécessaire
+    return get_local_model_response(message)
 
 @app.route('/')
 def home():
     """Page d'accueil basique"""
     return jsonify({
-        "status": "Chatbot prêt",
+        "status": "Chatbot prêt ✅",
         "description": "Envoyez une requête POST à /chat pour commencer.",
-        "routes": ["/chat", "/ask", "/health", "/test", "/debug"]
+        "developer": "Raphaël Niamé (+225) 05 06 53 15 22",
+        "routes": ["/chat", "/ask", "/health", "/test"]
     })
 
 @app.route('/chat', methods=['POST'])
@@ -142,14 +156,11 @@ def chat():
     try:
         logger.info("Requête reçue sur /chat")
 
-        # Vérifier le content-type
         if not request.is_json:
-            logger.error("Content-Type n'est pas JSON")
             return jsonify({'error': 'Content-Type doit être application/json'}), 400
 
         data = request.get_json()
         if not data:
-            logger.error("Pas de données JSON")
             return jsonify({'error': 'Données JSON manquantes'}), 400
 
         user_message = data.get('message', '').strip()
@@ -173,7 +184,6 @@ def ask():
     try:
         logger.info("Requête reçue sur /ask")
 
-        # Support FormData ET JSON
         if request.is_json:
             data = request.get_json()
             user_message = data.get('message', '').strip()
@@ -195,11 +205,12 @@ def ask():
 @app.route('/health')
 def health():
     """Vérification santé"""
+    model_status = "Non chargé" if qwen_pipeline is None else ("Erreur" if qwen_pipeline == "error" else "Actif ✅")
     return jsonify({
         'status': 'OK ✅',
         'message': 'Flask fonctionne',
-        'model_status': 'Actif ✅' if qwen_pipeline else 'Inactif ⚠️',
-        'routes': ['/chat', '/ask', '/health', '/test', '/debug']
+        'model_status': model_status,
+        'developer': 'Raphaël Niamé (+225) 05 06 53 15 22'
     })
 
 @app.route('/test')
@@ -209,24 +220,7 @@ def test():
     return jsonify({
         'test_message': 'bonjour',
         'response': test_response,
-        'model_status': bool(qwen_pipeline)
-    })
-
-@app.route('/debug')
-def debug():
-    """Debug complet"""
-    return jsonify({
-        'flask_status': 'Actif ✅',
-        'routes_disponibles': [
-            'GET /',
-            'POST /chat (JSON)',
-            'POST /ask (FormData/JSON)', 
-            'GET /health',
-            'GET /test',
-            'GET /debug'
-        ],
-        'custom_responses_count': len(CUSTOM_RESPONSES),
-        'model_loaded': bool(qwen_pipeline)
+        'status': 'OK ✅'
     })
 
 # Gestion d'erreurs
@@ -239,7 +233,7 @@ def server_error(error):
     return jsonify({'error': 'Erreur serveur interne'}), 500
 
 if __name__ == '__main__':
-    logger.info("🚀 Démarrage du chatbot avec modèle local")
+    logger.info("🚀 Démarrage du chatbot optimisé pour Render")
     
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
