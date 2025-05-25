@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
 import logging
+import re
 
 app = Flask(__name__)
 CORS(app)
@@ -9,6 +10,9 @@ CORS(app)
 # Configuration du logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Activer une gestion plus légère de PyTorch
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:32"
 
 # Variable globale pour le modèle (chargement paresseux)
 qwen_pipeline = None
@@ -19,23 +23,31 @@ def load_model_if_needed():
     if qwen_pipeline is None:
         try:
             from transformers import pipeline
-            logger.info("🔄 Chargement du modèle Qwen...")
-            
+            logger.info("🔄 Chargement du modèle Qwen1.5B-Chat...")
+
             qwen_pipeline = pipeline(
                 "text-generation",
-                model="Qwen/Qwen2-0.5B-Instruct",
-                max_new_tokens=30,  # Encore plus économe
+                model="Qwen/Qwen1.5B-Chat",
+                max_new_tokens=30,
+                truncation=True,
                 pad_token_id=50256,
-                device_map="auto",
-                torch_dtype="auto"
+                eos_token_id=50256,
+                repetition_penalty=1.2,
+                do_sample=True,
+                temperature=0.7,
+                top_k=50,
+                top_p=0.95,
+                torch_dtype="auto",
+                device_map="auto"
             )
-            logger.info("✅ Modèle Qwen chargé avec succès")
+            logger.info("✅ Modèle Qwen1.5B-Chat chargé avec succès")
             return True
         except Exception as e:
             logger.error(f"❌ Échec du chargement du modèle : {str(e)}")
             qwen_pipeline = "error"  # Marquer comme erreur
             return False
     return qwen_pipeline != "error"
+
 
 # Réponses personnalisées (fallback)
 CUSTOM_RESPONSES = {
@@ -72,40 +84,40 @@ def get_custom_response(message):
     """Cherche une réponse personnalisée avec correspondance de mots-clés multiples"""
     if not message:
         return None
-        
+
     message_lower = message.lower().strip()
+
     # Nettoyer le message : supprimer la ponctuation et séparer en mots
-    import re
-    # Remplacer la ponctuation par des espaces
     clean_message = re.sub(r'[^\w\s]', ' ', message_lower)
     message_words = set(clean_message.split())
-    
+
     # Parcourir toutes les réponses personnalisées
     for key, response in CUSTOM_RESPONSES.items():
         # Nettoyer la clé de la même façon
         clean_key = re.sub(r'[^\w\s]', ' ', key.lower())
         key_words = clean_key.split()
-        
+
         # Vérifier si tous les mots de la clé sont dans le message
         if key_words and all(word in message_words for word in key_words):
             logger.info(f"Correspondance trouvée: '{key}' -> '{message}'")
             return response
-    
+
     # Si aucune correspondance exacte, essayer une correspondance partielle
     for key, response in CUSTOM_RESPONSES.items():
         key_lower = key.lower()
         if key_lower in message_lower or message_lower in key_lower:
             logger.info(f"Correspondance partielle: '{key}' -> '{message}'")
             return response
-    
+
     return None
 
+
 def get_local_model_response(message):
-    """Utilise un modèle local (Qwen2-0.5B) pour générer une réponse"""
+    """Utilise un modèle local (Qwen1.5B) pour générer une réponse"""
     try:
         if not load_model_if_needed():
             return "⚠️ Le modèle IA est temporairement indisponible."
-            
+
         logger.info(f"Envoi au modèle local: {message}")
 
         prompt = f"User: {message}\nAssistant:"
@@ -122,6 +134,7 @@ def get_local_model_response(message):
     except Exception as e:
         logger.error(f"Erreur modèle local: {str(e)}")
         return "Erreur lors de la génération de la réponse."
+
 
 def get_bot_response(message):
     """Fonction principale pour obtenir une réponse"""
@@ -140,6 +153,7 @@ def get_bot_response(message):
     # 2. Modèle local IA seulement si nécessaire
     return get_local_model_response(message)
 
+
 @app.route('/')
 def home():
     """Page d'accueil basique"""
@@ -149,6 +163,7 @@ def home():
         "developer": "Raphaël Niamé (+225) 05 06 53 15 22",
         "routes": ["/chat", "/ask", "/health", "/test"]
     })
+
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -178,6 +193,7 @@ def chat():
         logger.error(f"Erreur dans /chat: {str(e)}")
         return jsonify({'error': f'Erreur serveur: {str(e)}'}), 500
 
+
 @app.route('/ask', methods=['POST'])
 def ask():
     """Route pour compatibilité (FormData et JSON)"""
@@ -202,6 +218,7 @@ def ask():
         logger.error(f"Erreur /ask: {str(e)}")
         return jsonify({'error': f'Erreur: {str(e)}'}), 500
 
+
 @app.route('/health')
 def health():
     """Vérification santé"""
@@ -213,6 +230,7 @@ def health():
         'developer': 'Raphaël Niamé (+225) 05 06 53 15 22'
     })
 
+
 @app.route('/test')
 def test():
     """Test de l'API"""
@@ -223,6 +241,7 @@ def test():
         'status': 'OK ✅'
     })
 
+
 # Gestion d'erreurs
 @app.errorhandler(404)
 def not_found(error):
@@ -232,8 +251,9 @@ def not_found(error):
 def server_error(error):
     return jsonify({'error': 'Erreur serveur interne'}), 500
 
+
 if __name__ == '__main__':
     logger.info("🚀 Démarrage du chatbot optimisé pour Render")
-    
+
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)

@@ -1,14 +1,13 @@
-# Flask minimal
 Flask==2.3.3
 gunicorn==21.2.0
+transformers==4.36.0
+torch==2.1.0+cpu --extra-index-url https://download.pytorch.org/whl/cpu 
 Flask-Cors==3.0.10
 
-# IA - Versions minimales pour Qwen2-0.5B-Instruct
-transformers==4.36.0
-torch==2.1.0
-huggingface_hub==0.20.0
-
-# Strictement nécessaire pour Qwen
 tokenizers==0.15.0
 safetensors==0.4.1
+huggingface_hub==0.20.0
 requests==2.31.0
+tqdm==4.67.1
+typing-extensions==4.13.0
+packaging==25.0
