@@ -1,19 +1,28 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, request, jsonify
 from flask_cors import CORS
-import requests
 import os
 import logging
+from transformers import pipeline
 
 app = Flask(__name__)
-CORS(app)  # Permet les requêtes cross-origin
+CORS(app)
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configuration Hugging Face
-HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta"
-HUGGINGFACE_TOKEN = os.getenv('HUGGINGFACE_API_KEY')
+# Charger le modèle Qwen localement
+try:
+    qwen_pipeline = pipeline(
+        "text-generation",
+        model="Qwen/Qwen2-0.5B-Instruct",
+        max_new_tokens=100,
+        pad_token_id=50256
+    )
+    logger.info("✅ Modèle Qwen chargé")
+except Exception as e:
+    logger.error(f"❌ Échec du chargement du modèle : {str(e)}")
+    qwen_pipeline = None
 
 # Réponses personnalisées (fallback)
 CUSTOM_RESPONSES = {
@@ -27,15 +36,23 @@ CUSTOM_RESPONSES = {
     "qui t'a conçu": "Raphaël Niamé (+225) 05 06 53 15 22",
     "qui t'a concu": "Raphaël Niamé (+225) 05 06 53 15 22",
     "qui t'a fait": "Raphaël Niamé (+225) 05 06 53 15 22",
-    "Qui t'a conçu": "Raphaël Niamé (+225) 05 06 53 15 22",
-    "Qui t'a concu": "Raphaël Niamé (+225) 05 06 53 15 22",
-    "Qui t'a concu": "Raphaël Niamé (+225) 05 06 53 15 22",
-    "qui est Messy charles": "C'est le père de Manou et Messy",
-    "qui t'a conçu": "Raphaël Niamé (+225) 05 06 53 15 22",
-    "qui est Awainou Messy charles": "C'est le père de Manou et Messy",
-    "Messy charles": "C'est le père de Manou et Messy",
-    "Awainou Messy charles": "C'est le père de Manou et Messy",
+    "qui est messy charles": "C'est le père de Manou et Messy",
     "bonsoir": "Bonsoir ! Comment puis-je vous aider ce soir ?",
+    "bien": "OK. Que puis-je faire pour vous ?",
+    "très bien": "OK. Que puis-je faire pour vous ?",
+    "je vais bien et toi": "Très bien. Comment puis-je vous aider ?",
+    "comment vas-tu": "Je vais bien, merci ! Et vous ?",
+    "comment allez-vous": "Je vais bien, merci ! Et vous ?",
+    "comment t'appelles-tu": "Je suis un assistant virtuel sans nom propre. Tu peux m'appeler simplement 'Assistant'. Comment puis-je t'aider aujourd'hui ?",
+    "qui es-tu": "Je suis un assistant virtuel sans nom propre. Tu peux m'appeler simplement 'Assistant'. Comment puis-je t'aider aujourd'hui ?",
+    "quel est ton nom": "Je suis un assistant virtuel sans nom propre. Tu peux m'appeler simplement 'Assistant'. Comment puis-je t'aider aujourd'hui ?",
+    "tu t'appelles comment": "Je suis un assistant virtuel sans nom propre. Tu peux m'appeler simplement 'Assistant'. Comment puis-je t'aider aujourd'hui ?",
+    "qui est raphael niame": "C'est un développeur freelance d'applications web, mobiles et bureaux.",
+    "comment contacter raphael niame": "Raphaël Niamé: (+225) 05 06 53 15 22",
+    "email": "niame225@gmail.com",
+    "oulai": "c'est le père de Tchounatchou",
+    "soma": "c'est un célèbre agent immobilier",
+    "oré Roland": "C'est un grand homme d'affaires. Il est ivoirien"
 }
 
 def get_custom_response(message):
@@ -70,138 +87,107 @@ def get_custom_response(message):
     
     return None
 
-def get_huggingface_response(message):
-    """Appel à l'API Hugging Face avec gestion d'erreur complète"""
+def get_local_model_response(message):
+    """Utilise un modèle local (Qwen2-0.5B) pour générer une réponse"""
     try:
-        headers = {
-            "Content-Type": "application/json"
-        }
-        
-        if HUGGINGFACE_TOKEN:
-            headers["Authorization"] = f"Bearer {HUGGINGFACE_TOKEN}"
-        
-        payload = {
-            "inputs": message,
-            "parameters": {
-                "max_length": 50,
-                "temperature": 0.7,
-                "do_sample": True,
-                "pad_token_id": 50256
-            },
-            "options": {
-                "wait_for_model": True
-            }
-        }
-        
-        logger.info(f"Envoi requête HF pour: {message}")
-        
-        response = requests.post(
-            HUGGINGFACE_API_URL, 
-            headers=headers, 
-            json=payload,
-            timeout=30
-        )
-        
-        logger.info(f"Status HF: {response.status_code}")
-        
-        if response.status_code == 200:
-            result = response.json()
-            if result and len(result) > 0:
-                generated_text = result[0].get('generated_text', '')
-                if message in generated_text:
-                    generated_text = generated_text.replace(message, '').strip()
-                
-                if generated_text and len(generated_text) > 3:
-                    sentences = generated_text.split('.')
-                    clean_response = sentences[0].strip()
-                    return clean_response + "." if clean_response else "Je ne sais pas quoi répondre."
-                
-        elif response.status_code == 402:
-            return "⚠️ Service IA temporairement indisponible (limite atteinte). Essayez 'bonjour', 'merci', etc."
-        elif response.status_code == 503:
-            return "🔄 Modèle en cours de chargement, réessayez dans 30 secondes."
-        else:
-            logger.error(f"Erreur HF: {response.status_code}")
-            return f"❌ Erreur technique (Code: {response.status_code})"
-            
+        logger.info(f"Envoi au modèle local: {message}")
+
+        prompt = f"User: {message}\nAssistant:"
+        response = qwen_pipeline(prompt)
+
+        if response and len(response) > 0:
+            generated_text = response[0]['generated_text'].replace(prompt, '').strip()
+
+            if generated_text:
+                return generated_text.split('\n')[0][:250]  # Limite à 250 caractères
+
+        return "Je n'ai pas réussi à comprendre votre question."
+
     except Exception as e:
-        logger.error(f"Exception HF: {str(e)}")
-        return "🔧 Erreur technique, réessayez."
+        logger.error(f"Erreur modèle local: {str(e)}")
+        return "Erreur lors de la génération de la réponse."
 
 def get_bot_response(message):
     """Fonction principale pour obtenir une réponse"""
     if not message or len(message.strip()) == 0:
         return "Veuillez saisir un message."
-    
+
     if len(message) > 200:
         return "Message trop long (max 200 caractères)."
-    
+
     # 1. Réponses personnalisées d'abord
     custom_response = get_custom_response(message)
     if custom_response:
         logger.info(f"Réponse personnalisée pour: {message}")
         return custom_response
-    
-    # 2. API Hugging Face
-    return get_huggingface_response(message)
+
+    # 2. Modèle local IA
+    if qwen_pipeline:
+        return get_local_model_response(message)
+    else:
+        return "⚠️ Le modèle IA est temporairement indisponible."
 
 @app.route('/')
 def home():
-    """Page d'accueil"""
-    return render_template('index.html')
+    """Page d'accueil basique"""
+    return jsonify({
+        "status": "Chatbot prêt",
+        "description": "Envoyez une requête POST à /chat pour commencer.",
+        "routes": ["/chat", "/ask", "/health", "/test", "/debug"]
+    })
 
 @app.route('/chat', methods=['POST'])
 def chat():
     """Route principale pour le chat (JSON)"""
     try:
         logger.info("Requête reçue sur /chat")
-        
+
         # Vérifier le content-type
         if not request.is_json:
             logger.error("Content-Type n'est pas JSON")
             return jsonify({'error': 'Content-Type doit être application/json'}), 400
-        
+
         data = request.get_json()
         if not data:
             logger.error("Pas de données JSON")
             return jsonify({'error': 'Données JSON manquantes'}), 400
-            
+
         user_message = data.get('message', '').strip()
         logger.info(f"Message reçu: '{user_message}'")
-        
+
         if not user_message:
             return jsonify({'response': 'Veuillez saisir un message.'})
-        
+
         bot_response = get_bot_response(user_message)
         logger.info(f"Réponse envoyée: '{bot_response}'")
-        
+
         return jsonify({'response': bot_response})
-        
+
     except Exception as e:
         logger.error(f"Erreur dans /chat: {str(e)}")
         return jsonify({'error': f'Erreur serveur: {str(e)}'}), 500
 
-@app.route('/ask', methods=['POST'])  
+@app.route('/ask', methods=['POST'])
 def ask():
     """Route pour compatibilité (FormData et JSON)"""
     try:
         logger.info("Requête reçue sur /ask")
-        
+
         # Support FormData ET JSON
         if request.is_json:
             data = request.get_json()
             user_message = data.get('message', '').strip()
         else:
             user_message = request.form.get('message', '').strip()
-            
+
         logger.info(f"Message /ask: '{user_message}'")
-        
+
         if not user_message:
             return jsonify({'response': 'Veuillez saisir un message.'})
-        
+
         bot_response = get_bot_response(user_message)
         return jsonify({'response': bot_response})
-        
+
     except Exception as e:
         logger.error(f"Erreur /ask: {str(e)}")
         return jsonify({'error': f'Erreur: {str(e)}'}), 500
@@ -212,7 +198,7 @@ def health():
     return jsonify({
         'status': 'OK ✅',
         'message': 'Flask fonctionne',
-        'huggingface_token': 'Configuré' if HUGGINGFACE_TOKEN else 'Non configuré ⚠️',
+        'model_status': 'Actif ✅' if qwen_pipeline else 'Inactif ⚠️',
         'routes': ['/chat', '/ask', '/health', '/test', '/debug']
     })
 
@@ -223,7 +209,7 @@ def test():
     return jsonify({
         'test_message': 'bonjour',
         'response': test_response,
-        'token_status': bool(HUGGINGFACE_TOKEN)
+        'model_status': bool(qwen_pipeline)
     })
 
 @app.route('/debug')
@@ -239,11 +225,8 @@ def debug():
             'GET /test',
             'GET /debug'
         ],
-        'variables_env': {
-            'PORT': os.environ.get('PORT', 'Non défini'),
-            'HUGGINGFACE_API_KEY': 'Configuré' if HUGGINGFACE_TOKEN else 'Non configuré'
-        },
-        'custom_responses_count': len(CUSTOM_RESPONSES)
+        'custom_responses_count': len(CUSTOM_RESPONSES),
+        'model_loaded': bool(qwen_pipeline)
     })
 
 # Gestion d'erreurs
@@ -256,16 +239,7 @@ def server_error(error):
     return jsonify({'error': 'Erreur serveur interne'}), 500
 
 if __name__ == '__main__':
-    if not HUGGINGFACE_TOKEN:
-        logger.warning("⚠️ HUGGINGFACE_API_KEY non configuré")
-    else:
-        logger.info("✅ Token Hugging Face OK")
+    logger.info("🚀 Démarrage du chatbot avec modèle local")
     
     port = int(os.environ.get('PORT', 5000))
-    logger.info(f"🚀 Démarrage sur port {port}")
-    
-    app.run(
-        host='0.0.0.0', 
-        port=port, 
-        debug=False
-    )
+    app.run(host='0.0.0.0', port=port, debug=False)
